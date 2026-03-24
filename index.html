@@ -32,7 +32,7 @@
   .sidebar-label { font-size:10px; font-family:'DM Mono',monospace; color:var(--gray2); letter-spacing:2px; text-transform:uppercase; margin-bottom:10px; }
   .quick-btn { width:100%; background:var(--dark3); border:1px solid var(--dark4); color:var(--white); padding:9px 12px; border-radius:6px; font-family:'DM Sans',sans-serif; font-size:13px; text-align:left; cursor:pointer; margin-bottom:6px; transition:all 0.15s; display:flex; align-items:center; gap:8px; }
   .quick-btn:hover { background:var(--dark4); border-color:var(--gold); color:var(--gold); }
-  .api-badge { background:var(--dark3); border:1px solid #27AE6040; border-radius:6px; padding:8px 10px; font-family:'DM Mono',monospace; font-size:10px; color:var(--green); line-height:1.6; }
+  .api-badge { background:var(--dark3); border:1px solid #27AE6040; border-radius:6px; padding:8px 10px; font-family:'DM Mono',monospace; font-size:10px; color:var(--green); line-height:1.8; }
 
   .chat-area { flex:1; display:flex; flex-direction:column; overflow:hidden; }
   .messages { flex:1; overflow-y:auto; padding:24px; display:flex; flex-direction:column; gap:16px; scroll-behavior:smooth; }
@@ -108,8 +108,8 @@
       <button class="quick-btn" onclick="setExample('Venta exportación: 2000 kg azufre elemental a Colombia Agro SAS, 0.52 USD/kg, crédito 30 días')">🌎 Exportación</button>
     </div>
     <div class="sidebar-section">
-      <div class="sidebar-label">Estado de conexión</div>
-      <div class="api-badge">✓ Google Apps Script<br>✓ AZUFRENCA Gestion Sheet<br>✓ Pestañas: VENTAS · EGRESOS · CLIENTES</div>
+      <div class="sidebar-label">Estado</div>
+      <div class="api-badge">✓ IA integrada en Apps Script<br>✓ AZUFRENCA Gestion Sheet<br>✓ VENTAS · EGRESOS · CLIENTES</div>
     </div>
   </div>
 
@@ -159,48 +159,13 @@ const TABS = {
   clientes: '👥 CLIENTES'
 };
 
-async function writeToSheet(tab, values) {
-  try {
-    const res = await fetch(SCRIPT_URL, {
-      method: 'POST',
-      body: JSON.stringify({ tab, values }),
-      headers: { 'Content-Type': 'text/plain' }
-    });
-    return await res.json();
-  } catch(e) {
-    return { ok: false, error: e.message };
-  }
-}
-
-async function parseWithAI(userText) {
-  const today = new Date().toLocaleDateString('es-VE');
-  const system = `Eres el asistente de gestión de AZUFRENCA, empresa venezolana que comercializa azufre agrícola y pecuario.
-Interpreta mensajes en lenguaje natural y extrae datos estructurados para Google Sheets.
-SECTORES: Ganadero / Pecuario | Agrícola | Exportación | Distribuidor / Revendedor | Industrial
-PRODUCTOS: Azufre Elemental 90% | Azufre Micronizado 98% | Azufre Granulado | Azufre Pastillas | Otro
-FORMAS DE PAGO: Transferencia Bs | Transferencia USD | Efectivo USD | Efectivo Bs | Zelle | Crédito 30 días | Crédito 60 días
-ESTADOS DE COBRO: Cobrado | Pendiente | Parcial
-CAT. EGRESOS: Nómina / Sueldos | Compra de Insumos | Logística / Flete Nacional | Logística / Flete Exportación | Administrativo / Oficina | Marketing / Publicidad | Servicios Públicos | Impuestos / IGTF | Otro
-Responde SOLO con JSON válido sin markdown.
-Para ventas: {"type":"venta","data":{"fecha":"${today}","factura":"","cliente":"","sector":"","mercado":"Nacional","producto":"","cantidad":0,"precio_usd":0,"estado_cobro":"Pendiente","forma_pago":"","observaciones":""},"resumen":"texto breve","confirmacion":"mensaje confirmando registro en Google Sheets"}
-Para egresos: {"type":"egreso","data":{"fecha":"${today}","categoria":"","subcategoria":"","proveedor":"","descripcion":"","monto_usd":0,"monto_bs":0,"forma_pago":"","comprobante":"","observaciones":""},"resumen":"texto breve","confirmacion":"mensaje confirmando"}
-Para clientes: {"type":"cliente","data":{"nombre":"","tipo":"Cliente","sector":"","mercado":"Nacional","rif":"","whatsapp":"","ubicacion":"","estado":"Activo","notas":""},"resumen":"texto breve","confirmacion":"mensaje confirmando"}
-Para consultas: {"type":"consulta","respuesta":"respuesta útil"}
-Para ambigüedades: {"type":"clarificacion","pregunta":"pregunta específica"}`;
-
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+async function callScript(payload) {
+  const res = await fetch(SCRIPT_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1000,
-      system,
-      messages: [{ role: 'user', content: userText }]
-    })
+    body: JSON.stringify(payload),
+    headers: { 'Content-Type': 'text/plain' }
   });
-  const data = await res.json();
-  const text = data.content[0].text.trim().replace(/```json|```/g,'').trim();
-  return JSON.parse(text);
+  return await res.json();
 }
 
 function buildRow(parsed) {
@@ -214,11 +179,13 @@ function buildRow(parsed) {
   if (parsed.type === 'egreso') {
     const d = parsed.data;
     return [d.fecha, d.categoria, d.subcategoria, d.proveedor, d.descripcion,
-            parseFloat(d.monto_usd)||0, parseFloat(d.monto_bs)||0, d.forma_pago, d.comprobante, d.observaciones];
+            parseFloat(d.monto_usd)||0, parseFloat(d.monto_bs)||0,
+            d.forma_pago, d.comprobante, d.observaciones];
   }
   if (parsed.type === 'cliente') {
     const d = parsed.data;
-    return [d.nombre, d.tipo, d.sector, d.mercado, d.rif, d.whatsapp, d.ubicacion, d.estado, '', d.notas];
+    return [d.nombre, d.tipo, d.sector, d.mercado, d.rif,
+            d.whatsapp, d.ubicacion, d.estado, '', d.notas];
   }
   return [];
 }
@@ -232,17 +199,26 @@ async function sendMessage() {
   input.value = ''; input.style.height = 'auto';
   const typingId = addTyping();
   document.getElementById('sendBtn').disabled = true;
+
   try {
-    const parsed = await parseWithAI(text);
+    // Step 1: Parse with AI via Apps Script
+    const parsed = await callScript({ action: 'parse', text });
     removeTyping(typingId);
+
     if (parsed.type === 'consulta') { addMessage(parsed.respuesta, 'ai'); return; }
     if (parsed.type === 'clarificacion') { addMessage(parsed.pregunta, 'ai'); return; }
-    const tab = parsed.type === 'venta' ? TABS.ventas : parsed.type === 'egreso' ? TABS.egresos : TABS.clientes;
+
+    // Step 2: Write to Sheet via Apps Script
+    const tab = parsed.type === 'venta' ? TABS.ventas :
+                parsed.type === 'egreso' ? TABS.egresos : TABS.clientes;
     const values = buildRow(parsed);
     const cardEl = addActionCard(parsed);
-    const result = await writeToSheet(tab, values);
+
+    const result = await callScript({ action: 'write', tab, values });
     updateActionCard(cardEl, result.ok, result.error);
-    addMessage(result.ok ? (parsed.confirmacion || '✓ Registrado en Google Sheets.') : `No se pudo escribir: ${result.error||'error'}`, 'ai');
+    addMessage(result.ok ? (parsed.confirmacion || '✓ Registrado en Google Sheets.') :
+               `No se pudo escribir: ${result.error||'error desconocido'}`, 'ai');
+
   } catch(e) {
     removeTyping(typingId);
     addMessage(`Error: ${e.message}`, 'ai');
@@ -272,7 +248,7 @@ function addActionCard(parsed) {
             <div class="action-row"><span class="key">PRODUCTO</span><span class="val">${d.producto||'—'}</span></div>
             <div class="action-row"><span class="key">CANTIDAD</span><span class="val">${d.cantidad} kg</span></div>
             <div class="action-row"><span class="key">TOTAL USD</span><span class="val gold">$${total}</span></div>
-            <div class="action-row"><span class="key">SECTOR / MERCADO</span><span class="val">${d.sector||'—'} · ${d.mercado||'—'}</span></div>
+            <div class="action-row"><span class="key">SECTOR · MERCADO</span><span class="val">${d.sector||'—'} · ${d.mercado||'—'}</span></div>
             <div class="action-row"><span class="key">ESTADO COBRO</span><span class="val">${d.estado_cobro||'—'}</span></div>`;
   } else if (parsed.type === 'egreso') {
     rows = `<div class="action-row"><span class="key">CATEGORÍA</span><span class="val">${d.categoria||'—'}</span></div>
