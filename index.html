@@ -138,6 +138,67 @@
 </div>
 <script>
 const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyeDk1zkGNONF5YurMuC4EhsB6Rm5DPIXM2Pt-xrw6ApPOp1gjUA694YgtesQw7jLd85w/exec';
+const ANTHROPIC_KEY = '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';
+
+const TABS = {
+  ventas: '📊 VENTAS',
+  egresos: '💸 EGRESOS',
+  clientes: '👥 CLIENTES'
+};
+
+async function parseWithAI(text) {
+  const today = new Date().toLocaleDateString('es-VE');
+  const system = `Eres el asistente de AZUFRENCA, empresa venezolana de azufre agrícola y pecuario. Interpreta el mensaje y responde SOLO con JSON válido sin markdown.
+SECTORES: Ganadero / Pecuario | Agrícola | Exportación | Distribuidor / Revendedor | Industrial
+PRODUCTOS: Azufre Elemental 90% | Azufre Micronizado 98% | Azufre Granulado | Azufre Pastillas | Otro
+FORMAS DE PAGO: Transferencia Bs | Transferencia USD | Efectivo USD | Efectivo Bs | Zelle | Crédito 30 días | Crédito 60 días
+ESTADOS DE COBRO: Cobrado | Pendiente | Parcial
+CAT. EGRESOS: Nómina / Sueldos | Compra de Insumos | Logística / Flete Nacional | Logística / Flete Exportación | Administrativo / Oficina | Marketing / Publicidad | Servicios Públicos | Impuestos / IGTF | Otro
+Para ventas: {"type":"venta","data":{"fecha":"${today}","factura":"","cliente":"","sector":"","mercado":"Nacional","producto":"","cantidad":0,"precio_usd":0,"estado_cobro":"Pendiente","forma_pago":"","observaciones":""},"resumen":"texto breve","confirmacion":"mensaje amigable"}
+Para egresos: {"type":"egreso","data":{"fecha":"${today}","categoria":"","subcategoria":"","proveedor":"","descripcion":"","monto_usd":0,"monto_bs":0,"forma_pago":"","comprobante":"","observaciones":""},"resumen":"texto breve","confirmacion":"mensaje amigable"}
+Para clientes: {"type":"cliente","data":{"nombre":"","tipo":"Cliente","sector":"","mercado":"Nacional","rif":"","whatsapp":"","ubicacion":"","estado":"Activo","notas":""},"resumen":"texto breve","confirmacion":"mensaje amigable"}
+Para consultas: {"type":"consulta","respuesta":"respuesta útil"}
+Para ambigüedades: {"type":"clarificacion","pregunta":"pregunta específica"}`;
+
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 1000, system, messages: [{ role: 'user', content: text }] })
+  });
+  const data = await res.json();
+  const raw = data.content[0].text.trim().replace(/```json|```/g, '').trim();
+  return JSON.parse(raw);
+}
+
+async function writeToSheet(tab, values) {
+  const res = await fetch(SCRIPT_URL, {
+    method: 'POST',
+    body: JSON.stringify({ tab, values }),
+    headers: { 'Content-Type': 'text/plain' }
+  });
+  return await res.json();
+}
+
+function buildRow(parsed) {
+  if (parsed.type === 'venta') {
+    const d = parsed.data;
+    const total = (parseFloat(d.cantidad)||0) * (parseFloat(d.precio_usd)||0);
+    return [d.fecha, d.factura||'', d.cliente||'', d.sector||'', d.mercado||'Nacional',
+            d.producto||'', parseFloat(d.cantidad)||0, parseFloat(d.precio_usd)||0,
+            total, '', '', d.estado_cobro||'Pendiente', '', d.forma_pago||'', d.observaciones||''];
+  }
+  if (parsed.type === 'egreso') {
+    const d = parsed.data;
+    return [d.fecha, d.categoria||'', d.subcategoria||'', d.proveedor||'', d.descripcion||'',
+            parseFloat(d.monto_usd)||0, parseFloat(d.monto_bs)||0, d.forma_pago||'', d.comprobante||'', d.observaciones||''];
+  }
+  if (parsed.type === 'cliente') {
+    const d = parsed.data;
+    return [d.nombre||'', d.tipo||'Cliente', d.sector||'', d.mercado||'Nacional',
+            d.rif||'', d.whatsapp||'', d.ubicacion||'', d.estado||'Activo', '', d.notas||''];
+  }
+  return [];
+}
 
 async function sendMessage() {
   const input = document.getElementById('userInput');
@@ -149,27 +210,31 @@ async function sendMessage() {
   const typingId = addTyping();
   document.getElementById('sendBtn').disabled = true;
   try {
-    const res = await fetch(SCRIPT_URL, {
-      method: 'POST',
-      body: JSON.stringify({ text }),
-      headers: { 'Content-Type': 'text/plain' }
-    });
-    const parsed = await res.json();
+    const parsed = await parseWithAI(text);
     removeTyping(typingId);
     if (parsed.type === 'consulta') { addMessage(parsed.respuesta, 'ai'); return; }
     if (parsed.type === 'clarificacion') { addMessage(parsed.pregunta, 'ai'); return; }
-    if (parsed.ok) {
-      addActionCard(parsed);
-      addMessage(parsed.confirmacion || '✓ Registrado en Google Sheets.', 'ai');
-    } else {
-      addMessage('No se pudo registrar: ' + (parsed.error || 'error desconocido'), 'ai');
-    }
+    const type = parsed.type;
+    const tab = type === 'venta' ? '📊 VENTAS' : type === 'egreso' ? '💸 EGRESOS' : '👥 CLIENTES';
+    const values = buildRow(parsed);
+    const cardEl = addActionCard(parsed);
+    const result = await writeToSheet(tab, values);
+    updateActionCard(cardEl, result.ok, result.error);
+    addMessage(result.ok ? (parsed.confirmacion || '✓ Registrado en Google Sheets.') : `No se pudo escribir: ${result.error||'error'}`, 'ai');
   } catch(e) {
     removeTyping(typingId);
-    addMessage('Error de conexión: ' + e.message, 'ai');
+    addMessage(`Error: ${e.message}`, 'ai');
   } finally {
     document.getElementById('sendBtn').disabled = false;
   }
+}
+
+function addMessage(text, role) {
+  const msgs = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = `msg ${role}`;
+  div.innerHTML = `<div class="avatar ${role==='ai'?'ai':'user-av'}">${role==='ai'?'AZ':'👤'}</div><div class="bubble">${text.replace(/\n/g,'<br>')}</div>`;
+  msgs.appendChild(div); msgs.scrollTop = msgs.scrollHeight;
 }
 
 function addActionCard(parsed) {
@@ -197,18 +262,16 @@ function addActionCard(parsed) {
             <div class="action-row"><span class="key">UBICACIÓN</span><span class="val">${d.ubicacion||'—'}</span></div>`;
   }
   const typeLabel = parsed.type==='venta'?'📊 VENTA':parsed.type==='egreso'?'💸 EGRESO':'👥 CLIENTE';
-  wrap.innerHTML = `<div class="avatar ai">AZ</div><div><div style="font-size:13px;color:var(--gray);margin-bottom:6px;">${parsed.resumen||''}</div><div class="action-card"><div class="action-header success">✓ REGISTRADO EN GOOGLE SHEETS — ${typeLabel}</div><div class="action-body">${rows}</div></div></div>`;
-  msgs.appendChild(wrap);
-  msgs.scrollTop = msgs.scrollHeight;
+  wrap.innerHTML = `<div class="avatar ai">AZ</div><div><div style="font-size:13px;color:var(--gray);margin-bottom:6px;">${parsed.resumen||''}</div><div class="action-card"><div class="action-header pending">⏳ ESCRIBIENDO EN GOOGLE SHEETS — ${typeLabel}</div><div class="action-body">${rows}</div></div></div>`;
+  msgs.appendChild(wrap); msgs.scrollTop = msgs.scrollHeight;
+  return wrap;
 }
 
-function addMessage(text, role) {
-  const msgs = document.getElementById('messages');
-  const div = document.createElement('div');
-  div.className = `msg ${role}`;
-  div.innerHTML = `<div class="avatar ${role==='ai'?'ai':'user-av'}">${role==='ai'?'AZ':'👤'}</div><div class="bubble">${text.replace(/\n/g,'<br>')}</div>`;
-  msgs.appendChild(div);
-  msgs.scrollTop = msgs.scrollHeight;
+function updateActionCard(cardEl, ok, errMsg) {
+  const hdr = cardEl.querySelector('.action-header');
+  if (!hdr) return;
+  hdr.className = `action-header ${ok?'success':'error'}`;
+  hdr.textContent = ok ? '✓ REGISTRADO EN GOOGLE SHEETS' : '✗ ERROR: '+(errMsg||'no se pudo escribir');
 }
 
 function addTyping() {
